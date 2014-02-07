@@ -32,7 +32,28 @@ class EmailAddressManager(models.Manager):
         # this is a list rather than a generator because we probably want to
         # do a len() on it right away
         return [address.user for address in self.filter(verified=True,
-                                                        email=email)]
+                                                        email__iexact=email)]
+
+    def fill_cache_for_user(self, user, addresses):
+        """
+        In a multi-db setup, inserting records and re-reading them later
+        on may result in not being able to find newly inserted
+        records. Therefore, we maintain a cache for the user so that
+        we can avoid database access when we need to re-read..
+        """
+        user._emailaddress_cache = addresses
+
+    def get_for_user(self, user, email):
+        cache_key = '_emailaddress_cache'
+        addresses = getattr(user, cache_key, None)
+        if addresses is None:
+            return self.get(user=user,
+                            email__iexact=email)
+        else:
+            for address in addresses:
+                if address.email.lower() == email.lower():
+                    return address
+            raise self.model.DoesNotExist()
 
 
 class EmailConfirmationManager(models.Manager):

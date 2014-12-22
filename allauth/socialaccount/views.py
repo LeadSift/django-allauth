@@ -3,22 +3,30 @@ from django.http import HttpResponseRedirect
 from django.core.urlresolvers import reverse, reverse_lazy
 from django.contrib.sites.models import Site
 from django.contrib.auth.decorators import login_required
-from django.views.generic.base import View, TemplateView
+from django.views.generic.base import TemplateView
 from django.views.generic.edit import FormView
 
 from ..account.views import (CloseableSignupMixin,
                              RedirectAuthenticatedUserMixin)
 from ..account.adapter import get_adapter as get_account_adapter
+from ..utils import get_form_class
+
 from .adapter import get_adapter
 from .models import SocialLogin
 from .forms import DisconnectForm, SignupForm
 from . import helpers
+from . import app_settings
 
 
 class SignupView(RedirectAuthenticatedUserMixin, CloseableSignupMixin,
                  FormView):
     form_class = SignupForm
     template_name = 'socialaccount/signup.html'
+
+    def get_form_class(self):
+        return get_form_class(app_settings.FORMS,
+                              'signup',
+                              self.form_class)
 
     def dispatch(self, request, *args, **kwargs):
         self.sociallogin = None
@@ -61,9 +69,9 @@ class LoginCancelledView(TemplateView):
 login_cancelled = LoginCancelledView.as_view()
 
 
-class LoginErrorView(View):
-    def get(self, request):
-        return helpers.render_authentication_error(request)
+class LoginErrorView(TemplateView):
+    template_name = "socialaccount/authentication_error.html"
+
 
 login_error = LoginErrorView.as_view()
 
@@ -72,6 +80,11 @@ class ConnectionsView(FormView):
     template_name = "socialaccount/connections.html"
     form_class = DisconnectForm
     success_url = reverse_lazy("socialaccount_connections")
+
+    def get_form_class(self):
+        return get_form_class(app_settings.FORMS,
+                              'disconnect',
+                              self.form_class)
 
     def get_form_kwargs(self):
         kwargs = super(ConnectionsView, self).get_form_kwargs()

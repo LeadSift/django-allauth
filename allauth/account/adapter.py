@@ -1,3 +1,6 @@
+from __future__ import unicode_literals
+
+import re
 import warnings
 import json
 
@@ -21,6 +24,11 @@ from ..utils import (import_attribute, get_user_model,
                      resolve_url)
 
 from . import app_settings
+
+# Don't bother turning this into a setting, as changing this also
+# requires changing the accompanying form error message. So if you
+# need to change any of this, simply override clean_username().
+USERNAME_REGEX = re.compile(r'^[\w.@+-]+$', re.UNICODE)
 
 
 class DefaultAccountAdapter(object):
@@ -49,7 +57,7 @@ class DefaultAccountAdapter(object):
         prefix = app_settings.EMAIL_SUBJECT_PREFIX
         if prefix is None:
             site = Site.objects.get_current()
-            prefix = u"[{name}] ".format(name=site.name)
+            prefix = "[{name}] ".format(name=site.name)
         return prefix + force_text(subject)
 
     def render_mail(self, template_prefix, email, context):
@@ -110,7 +118,7 @@ class DefaultAccountAdapter(object):
 
     def get_logout_redirect_url(self, request):
         """
-        Returns the URL to redriect to after the user logs out. Note that
+        Returns the URL to redirect to after the user logs out. Note that
         this method is also invoked if you attempt to log out while no users
         is logged in. Therefore, request.user is not guaranteed to be an
         authenticated user.
@@ -179,8 +187,10 @@ class DefaultAccountAdapter(object):
         username = data.get('username')
         user_email(user, email)
         user_username(user, username)
-        user_field(user, 'first_name', first_name or '')
-        user_field(user, 'last_name', last_name or '')
+        if first_name:
+            user_field(user, 'first_name', first_name)
+        if last_name:
+            user_field(user, 'last_name', last_name)
         if 'password1' in data:
             user.set_password(data["password1"])
         else:
@@ -197,14 +207,14 @@ class DefaultAccountAdapter(object):
         Validates the username. You can hook into this if you want to
         (dynamically) restrict what usernames can be chosen.
         """
-        from django.contrib.auth.forms import UserCreationForm
-        USERNAME_REGEX = UserCreationForm().fields['username'].regex
         if not USERNAME_REGEX.match(username):
             raise forms.ValidationError(_("Usernames can only contain "
                                           "letters, digits and @/./+/-/_."))
 
         # TODO: Add regexp support to USERNAME_BLACKLIST
-        if username in app_settings.USERNAME_BLACKLIST:
+        username_blacklist_lower = [ub.lower()
+                                    for ub in app_settings.USERNAME_BLACKLIST]
+        if username.lower() in username_blacklist_lower:
             raise forms.ValidationError(_("Username can not be used. "
                                           "Please use other username."))
         username_field = app_settings.USER_MODEL_USERNAME_FIELD
@@ -224,6 +234,17 @@ class DefaultAccountAdapter(object):
         (dynamically) restrict what email addresses can be chosen.
         """
         return email
+
+    def clean_password(self, password):
+        """
+        Validates a password. You can hook into this if you want to
+        restric the allowed password choices.
+        """
+        min_length = app_settings.PASSWORD_MIN_LENGTH
+        if len(password) < min_length:
+            raise forms.ValidationError(_("Password must be a minimum of {0} "
+                                          "characters.").format(min_length))
+        return password
 
     def add_message(self, request, level, message_template,
                     message_context={}, extra_tags=''):
@@ -258,6 +279,37 @@ class DefaultAccountAdapter(object):
         return HttpResponse(json.dumps(data),
                             status=status,
                             content_type='application/json')
+
+    def login(self, request, user):
+        from django.contrib.auth import login
+        # HACK: This is not nice. The proper Django way is to use an
+        # authentication backend
+        if not hasattr(user, 'backend'):
+            user.backend \
+                = "allauth.account.auth_backends.AuthenticationBackend"
+        login(request, user)
+
+    def confirm_email(self, request, email_address):
+        """
+        Marks the email address as confirmed on the db
+        """
+        email_address.verified = True
+        email_address.set_as_primary(conditional=True)
+        email_address.save()
+
+    def set_password(self, user, password):
+        user.set_password(password)
+        user.save()
+
+    def get_user_search_fields(self):
+        user = get_user_model()()
+        return filter(lambda a: a and hasattr(user, a),
+                      [app_settings.USER_MODEL_USERNAME_FIELD,
+                       'first_name', 'last_name', 'email'])
+
+    def is_safe_url(self, url):
+        from django.utils.http import is_safe_url
+        return is_safe_url(url)
 
 
 def get_adapter():

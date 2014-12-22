@@ -3,7 +3,6 @@ from django.contrib.sites.models import Site
 from django.http import (HttpResponseRedirect, Http404,
                          HttpResponsePermanentRedirect)
 from django.shortcuts import get_object_or_404
-from django.utils.http import base36_to_int
 from django.views.generic.base import TemplateResponseMixin, View, TemplateView
 from django.views.generic.edit import FormView
 from django.contrib import messages
@@ -11,13 +10,16 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth import logout as auth_logout
 from django.contrib.auth.tokens import default_token_generator
 from django.shortcuts import redirect
+from django.views.decorators.debug import sensitive_post_parameters
+from django.utils.decorators import method_decorator
 
 from ..exceptions import ImmediateHttpResponse
-from ..utils import get_user_model
+from ..utils import get_user_model, get_form_class
 
 from .utils import (get_next_redirect_url, complete_signup,
                     get_login_redirect_url, perform_login,
-                    passthrough_next_redirect_url)
+                    passthrough_next_redirect_url,
+                    url_str_to_user_pk)
 from .forms import AddEmailForm, ChangePasswordForm
 from .forms import LoginForm, ResetPasswordKeyForm
 from .forms import ResetPasswordForm, SetPasswordForm, SignupForm
@@ -29,7 +31,9 @@ from . import app_settings
 
 from .adapter import get_adapter
 
-User = get_user_model()
+
+sensitive_post_parameters_m = method_decorator(
+    sensitive_post_parameters('password', 'password1', 'password2'))
 
 
 def _ajax_response(request, response, form=None):
@@ -89,9 +93,19 @@ class LoginView(RedirectAuthenticatedUserMixin,
     success_url = None
     redirect_field_name = "next"
 
+    @sensitive_post_parameters_m
+    def dispatch(self, request, *args, **kwargs):
+        return super(LoginView, self).dispatch(request, *args, **kwargs)
+
+    def get_form_class(self):
+        return get_form_class(app_settings.FORMS, 'login', self.form_class)
+
     def form_valid(self, form):
         success_url = self.get_success_url()
-        return form.login(self.request, redirect_url=success_url)
+        try:
+            return form.login(self.request, redirect_url=success_url)
+        except ImmediateHttpResponse as e:
+            return e.response
 
     def get_success_url(self):
         # Explicitly passed ?next= URL takes precedence
@@ -150,6 +164,13 @@ class SignupView(RedirectAuthenticatedUserMixin, CloseableSignupMixin,
     redirect_field_name = "next"
     success_url = None
 
+    @sensitive_post_parameters_m
+    def dispatch(self, request, *args, **kwargs):
+        return super(SignupView, self).dispatch(request, *args, **kwargs)
+
+    def get_form_class(self):
+        return get_form_class(app_settings.FORMS, 'signup', self.form_class)
+
     def get_success_url(self):
         # Explicitly passed ?next= URL takes precedence
         ret = (get_next_redirect_url(self.request,
@@ -206,9 +227,10 @@ class ConfirmEmailView(TemplateResponseMixin, View):
                                   messages.SUCCESS,
                                   'account/messages/email_confirmed.txt',
                                   {'email': confirmation.email_address.email})
-        resp = self.login_on_confirm(confirmation)
-        if resp:
-            return resp
+        if app_settings.LOGIN_ON_EMAIL_CONFIRMATION:
+            resp = self.login_on_confirm(confirmation)
+            if resp:
+                return resp
         # Don't -- allauth doesn't touch is_active so that sys admin can
         # use it to block users et al
         #
@@ -227,11 +249,11 @@ class ConfirmEmailView(TemplateResponseMixin, View):
         do not take proper care (e.g. don't purge used email
         confirmations), a malicious person that got hold of the link
         will be able to login over and over again and the user is
-        unable to do anything about it. Even restoring his own mailbox
+        unable to do anything about it. Even restoring their own mailbox
         security will not help, as the links will still work. For
         password reset this is different, this mechanism works only as
-        long as the attacker has access to the mailbox. If he no
-        longer has access he cannot issue a password request and
+        long as the attacker has access to the mailbox. If they no
+        longer has access they cannot issue a password request and
         intercept it. Furthermore, all places where the links are
         listed (log files, but even Google Analytics) all of a sudden
         need to be secured. Purging the email confirmation once
@@ -275,10 +297,13 @@ class ConfirmEmailView(TemplateResponseMixin, View):
 confirm_email = ConfirmEmailView.as_view()
 
 
-class EmailView(FormView):
+class EmailView(AjaxCapableProcessFormViewMixin, FormView):
     template_name = "account/email.html"
     form_class = AddEmailForm
     success_url = reverse_lazy('account_email')
+
+    def get_form_class(self):
+        return get_form_class(app_settings.FORMS, 'add_email', self.form_class)
 
     def dispatch(self, request, *args, **kwargs):
         sync_user_email_addresses(request.user)
@@ -313,11 +338,11 @@ class EmailView(FormView):
                 res = self._action_remove(request)
             elif "action_primary" in request.POST:
                 res = self._action_primary(request)
-            # TODO: Ugly. But if we .get() here the email is used as
-            # initial for the add form, whereas the user was not
-            # interacting with that form..
             res = res or HttpResponseRedirect(reverse('account_email'))
-        return res or self.get(request, *args, **kwargs)
+            # Given that we bypassed AjaxCapableProcessFormViewMixin,
+            # we'll have to call invoke it manually...
+            res = _ajax_response(request, res)
+        return res
 
     def _action_send(self, request, *args, **kwargs):
         email = request.POST["email"]
@@ -414,11 +439,17 @@ class EmailView(FormView):
 email = login_required(EmailView.as_view())
 
 
-class PasswordChangeView(FormView):
+class PasswordChangeView(AjaxCapableProcessFormViewMixin, FormView):
     template_name = "account/password_change.html"
     form_class = ChangePasswordForm
     success_url = reverse_lazy("account_change_password")
 
+    def get_form_class(self):
+        return get_form_class(app_settings.FORMS,
+                              'change_password',
+                              self.form_class)
+
+    @sensitive_post_parameters_m
     def dispatch(self, request, *args, **kwargs):
         if not request.user.has_usable_password():
             return HttpResponseRedirect(reverse('account_set_password'))
@@ -450,11 +481,17 @@ class PasswordChangeView(FormView):
 password_change = login_required(PasswordChangeView.as_view())
 
 
-class PasswordSetView(FormView):
+class PasswordSetView(AjaxCapableProcessFormViewMixin, FormView):
     template_name = "account/password_set.html"
     form_class = SetPasswordForm
     success_url = reverse_lazy("account_set_password")
 
+    def get_form_class(self):
+        return get_form_class(app_settings.FORMS,
+                              'set_password',
+                              self.form_class)
+
+    @sensitive_post_parameters_m
     def dispatch(self, request, *args, **kwargs):
         if request.user.has_usable_password():
             return HttpResponseRedirect(reverse('account_change_password'))
@@ -484,13 +521,18 @@ class PasswordSetView(FormView):
 password_set = login_required(PasswordSetView.as_view())
 
 
-class PasswordResetView(FormView):
+class PasswordResetView(AjaxCapableProcessFormViewMixin, FormView):
     template_name = "account/password_reset.html"
     form_class = ResetPasswordForm
     success_url = reverse_lazy("account_reset_password_done")
 
+    def get_form_class(self):
+        return get_form_class(app_settings.FORMS,
+                              'reset_password',
+                              self.form_class)
+
     def form_valid(self, form):
-        form.save()
+        form.save(self.request)
         return super(PasswordResetView, self).form_valid(form)
 
     def get_context_data(self, **kwargs):
@@ -509,19 +551,23 @@ class PasswordResetDoneView(TemplateView):
 password_reset_done = PasswordResetDoneView.as_view()
 
 
-class PasswordResetFromKeyView(FormView):
+class PasswordResetFromKeyView(AjaxCapableProcessFormViewMixin, FormView):
     template_name = "account/password_reset_from_key.html"
     form_class = ResetPasswordKeyForm
     token_generator = default_token_generator
     success_url = reverse_lazy("account_reset_password_from_key_done")
 
+    def get_form_class(self):
+        return get_form_class(app_settings.FORMS,
+                              'reset_password_from_key',
+                              self.form_class)
+
     def _get_user(self, uidb36):
-        # pull out user
         try:
-            uid_int = base36_to_int(uidb36)
+            pk = url_str_to_user_pk(uidb36)
         except ValueError:
             raise Http404
-        return get_object_or_404(User, id=uid_int)
+        return get_object_or_404(get_user_model(), pk=pk)
 
     def dispatch(self, request, uidb36, key, **kwargs):
         self.request = request

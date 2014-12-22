@@ -6,8 +6,6 @@ from ..utils import get_user_model
 from .app_settings import AuthenticationMethod
 from . import app_settings
 
-User = get_user_model()
-
 
 class AuthenticationBackend(ModelBackend):
 
@@ -26,13 +24,18 @@ class AuthenticationBackend(ModelBackend):
 
     def _authenticate_by_username(self, **credentials):
         username_field = app_settings.USER_MODEL_USERNAME_FIELD
-        if not username_field or not 'username' in credentials:
+        username = credentials.get('username')
+        password = credentials.get('password')
+
+        User = get_user_model()
+
+        if not username_field or username is None or password is None:
             return None
         try:
             # Username query is case insensitive
-            query = {username_field+'__iexact': credentials["username"]}
+            query = {username_field+'__iexact': username}
             user = User.objects.get(**query)
-            if user.check_password(credentials["password"]):
+            if user.check_password(password):
                 return user
         except User.DoesNotExist:
             return None
@@ -43,6 +46,8 @@ class AuthenticationBackend(ModelBackend):
         # django-tastypie basic authentication, the login is always
         # passed as `username`.  So let's place nice with other apps
         # and use username as fallback
+        User = get_user_model()
+
         email = credentials.get('email', credentials.get('username'))
         if email:
             users = User.objects.filter(Q(email__iexact=email)

@@ -125,7 +125,7 @@ TEMPLATE_DIRS = (
     # project and tweak it according to your needs
     # os.path.join(PROJECT_ROOT, 'templates', 'uniform', 'allauth'),
     # example project specific templates
-    os.path.join(PROJECT_ROOT, 'templates', 'plain', 'example')
+    os.path.join(PROJECT_ROOT, 'templates', 'plain', 'example'),
 )
 
 INSTALLED_APPS = (
@@ -153,6 +153,7 @@ INSTALLED_APPS = (
     'allauth.socialaccount.providers.twitter',
     'allauth.socialaccount.providers.vimeo',
     'allauth.socialaccount.providers.weibo',
+    'allauth.socialaccount.providers.xing',
 
     'example.demo'
 )

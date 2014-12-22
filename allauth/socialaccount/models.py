@@ -1,13 +1,12 @@
 from __future__ import absolute_import
 
-import json
-
 from django.core.exceptions import PermissionDenied
 from django.db import models
 from django.contrib.auth import authenticate
 from django.contrib.sites.models import Site
 from django.utils.encoding import python_2_unicode_compatible
 from django.utils.crypto import get_random_string
+from django.utils.translation import ugettext_lazy as _
 try:
     from django.utils.encoding import force_text
 except ImportError:
@@ -19,6 +18,7 @@ from allauth.account.utils import get_next_redirect_url, setup_user_email
 from allauth.utils import (get_user_model, serialize_instance,
                            deserialize_instance)
 
+from . import app_settings
 from . import providers
 from .fields import JSONField
 
@@ -34,22 +34,31 @@ class SocialAppManager(models.Manager):
 class SocialApp(models.Model):
     objects = SocialAppManager()
 
-    provider = models.CharField(max_length=30,
+    provider = models.CharField(verbose_name=_('provider'),
+                                max_length=30,
                                 choices=providers.registry.as_choices())
-    name = models.CharField(max_length=40)
-    client_id = models.CharField(max_length=100,
-                                 help_text='App ID, or consumer key')
-    key = models.CharField(max_length=100,
+    name = models.CharField(verbose_name=_('name'),
+                            max_length=40)
+    client_id = models.CharField(verbose_name=_('client id'),
+                                 max_length=100,
+                                 help_text=_('App ID, or consumer key'))
+    secret = models.CharField(verbose_name=_('secret key'),
+                              max_length=100,
+                              help_text=_('API secret, client secret, or'
+                              ' consumer secret'))
+    key = models.CharField(verbose_name=_('key'),
+                           max_length=100,
                            blank=True,
-                           help_text='Key (Stack Exchange only)')
-    secret = models.CharField(max_length=100,
-                              help_text='API secret, client secret, or'
-                              ' consumer secret')
+                           help_text=_('Key'))
     # Most apps can be used across multiple domains, therefore we use
     # a ManyToManyField. Note that Facebook requires an app per domain
     # (unless the domains share a common base name).
     # blank=True allows for disabling apps without removing them
     sites = models.ManyToManyField(Site, blank=True)
+
+    class Meta:
+        verbose_name = _('social application')
+        verbose_name_plural = _('social applications')
 
     def __str__(self):
         return self.name
@@ -58,7 +67,8 @@ class SocialApp(models.Model):
 @python_2_unicode_compatible
 class SocialAccount(models.Model):
     user = models.ForeignKey(allauth.app_settings.USER_MODEL)
-    provider = models.CharField(max_length=30,
+    provider = models.CharField(verbose_name=_('provider'),
+                                max_length=30,
                                 choices=providers.registry.as_choices())
     # Just in case you're wondering if an OpenID identity URL is going
     # to fit in a 'uid':
@@ -75,13 +85,17 @@ class SocialAccount(models.Model):
     # [1] http://code.djangoproject.com/ticket/2495.
     # [2] http://openid.net/specs/openid-authentication-1_1.html#limits
 
-    uid = models.CharField(max_length=255)
-    last_login = models.DateTimeField(auto_now=True)
-    date_joined = models.DateTimeField(auto_now_add=True)
-    extra_data = JSONField(default='{}')
+    uid = models.CharField(verbose_name=_('uid'), max_length=255)
+    last_login = models.DateTimeField(verbose_name=_('last login'),
+                                      auto_now=True)
+    date_joined = models.DateTimeField(verbose_name=_('date joined'),
+                                       auto_now_add=True)
+    extra_data = JSONField(verbose_name=_('extra data'), default='{}')
 
     class Meta:
         unique_together = ('provider', 'uid')
+        verbose_name = _('social account')
+        verbose_name_plural = _('social accounts')
 
     def authenticate(self):
         return authenticate(account=self)
@@ -107,15 +121,21 @@ class SocialToken(models.Model):
     app = models.ForeignKey(SocialApp)
     account = models.ForeignKey(SocialAccount)
     token = models \
-        .TextField(help_text='"oauth_token" (OAuth1) or access token (OAuth2)')
+        .TextField(verbose_name=_('social account'),
+                   help_text=_('"oauth_token" (OAuth1) or access token'
+                               ' (OAuth2)'))
     token_secret = models \
         .TextField(blank=True,
-                   help_text='"oauth_token_secret" (OAuth1) or refresh'
-                   ' token (OAuth2)')
-    expires_at = models.DateTimeField(blank=True, null=True)
+                   verbose_name=_('token secret'),
+                   help_text=_('"oauth_token_secret" (OAuth1) or refresh'
+                   ' token (OAuth2)'))
+    expires_at = models.DateTimeField(blank=True, null=True,
+                                      verbose_name=_('expires at'))
 
     class Meta:
         unique_together = ('app', 'account')
+        verbose_name = _('social application token')
+        verbose_name_plural = _('social application tokens')
 
     def __str__(self):
         return self.token
@@ -147,22 +167,23 @@ class SocialLogin(object):
     e-mail addresses retrieved from the provider.
     """
 
-    def __init__(self, account=None, token=None, email_addresses=[]):
+    def __init__(self, user=None, account=None, token=None,
+                 email_addresses=[]):
         if token:
             assert token.account is None or token.account == account
-            token.account = account
         self.token = token
+        self.user = user
         self.account = account
         self.email_addresses = email_addresses
         self.state = {}
 
     def connect(self, request, user):
-        self.account.user = user
+        self.user = user
         self.save(request, connect=True)
 
     def serialize(self):
         ret = dict(account=serialize_instance(self.account),
-                   user=serialize_instance(self.account.user),
+                   user=serialize_instance(self.user),
                    state=self.state,
                    email_addresses=[serialize_instance(ea)
                                     for ea in self.email_addresses])
@@ -174,7 +195,6 @@ class SocialLogin(object):
     def deserialize(cls, data):
         account = deserialize_instance(SocialAccount, data['account'])
         user = deserialize_instance(get_user_model(), data['user'])
-        account.user = user
         if 'token' in data:
             token = deserialize_instance(SocialToken, data['token'])
         else:
@@ -197,11 +217,11 @@ class SocialLogin(object):
         the user may be an existing one (when connecting accounts)
         """
         assert not self.is_existing
-        user = self.account.user
+        user = self.user
         user.save()
         self.account.user = user
         self.account.save()
-        if self.token:
+        if app_settings.STORE_TOKENS and self.token:
             self.token.account = self.account
             self.token.save()
         if connect:
@@ -228,9 +248,10 @@ class SocialLogin(object):
             # Update account
             a.extra_data = self.account.extra_data
             self.account = a
+            self.user = self.account.user
             a.save()
             # Update token
-            if self.token:
+            if app_settings.STORE_TOKENS and self.token:
                 assert not self.token.pk
                 try:
                     t = SocialToken.objects.get(account=self.account,
@@ -260,6 +281,8 @@ class SocialLogin(object):
         if next_url:
             state['next'] = next_url
         state['process'] = request.REQUEST.get('process', 'login')
+        state['scope'] = request.REQUEST.get('scope', '')
+        state['auth_params'] = request.REQUEST.get('auth_params', '')
         return state
 
     @classmethod

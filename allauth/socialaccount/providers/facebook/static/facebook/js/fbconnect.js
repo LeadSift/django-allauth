@@ -27,7 +27,8 @@
         }
     }
 
-    var allauth = window.allauth = window.allauth || {};
+    var allauth = window.allauth = window.allauth || {},
+        fbSettings = JSON.parse(document.getElementById('allauth-facebook-settings').innerHTML);
 
     allauth.facebook = {
 
@@ -37,12 +38,14 @@
             window.fbAsyncInit = function() {
                 FB.init({
                     appId      : opts.appId,
+                    version    : opts.version,
                     channelUrl : opts.channelUrl,
                     status     : true,
                     cookie     : true,
                     oauth      : true,
                     xfbml      : true
                 });
+                allauth.facebook.onInit();
             };
 
             (function(d){
@@ -53,9 +56,14 @@
             }(document));
         },
 
+        onInit: function() {
+        },
+
         login: function(nextUrl, action, process) {
             var self = this;
             if (typeof(FB) == 'undefined') {
+		var url = this.opts.loginUrl + '?next=' + encodeURIComponent(nextUrl) + '&action=' + encodeURIComponent(action) + '&process=' + encodeURIComponent(process);
+		setLocationHref(url);
                 return;
             }
             if (action == 'reauthenticate') {
@@ -113,4 +121,5 @@
         }
     };
 
+    allauth.facebook.init(fbSettings);
 })();

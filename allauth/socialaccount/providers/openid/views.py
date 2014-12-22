@@ -19,6 +19,7 @@ from .utils import (DBOpenIDStore, SRegFields, AXAttributes,
                     JSONSafeSession)
 from .forms import LoginForm
 from .provider import OpenIDProvider
+from ..base import AuthError
 
 
 def _openid_consumer(request):
@@ -57,9 +58,13 @@ def login(request):
                 if request.method == 'POST':
                     form._errors["openid"] = form.error_class([e])
                 else:
-                    return render_authentication_error(request)
+                    return render_authentication_error(
+                        request,
+                        OpenIDProvider.id,
+                        exception=e)
     else:
-        form = LoginForm()
+        form = LoginForm(initial={'next': request.GET.get('next'),
+                                  'process': request.GET.get('process')})
     d = dict(form=form)
     return render_to_response('openid/login.html',
                               d, context_instance=RequestContext(request))
@@ -77,8 +82,13 @@ def callback(request):
             .sociallogin_from_response(request, response)
         login.state = SocialLogin.unstash_state(request)
         ret = complete_social_login(request, login)
-    elif response.status == consumer.CANCEL:
-        ret = HttpResponseRedirect(reverse('socialaccount_login_cancelled'))
     else:
-        ret = render_authentication_error(request)
+        if response.status == consumer.CANCEL:
+            error = AuthError.CANCELLED
+        else:
+            error = AuthError.UNKNOWN
+        ret = render_authentication_error(
+            request,
+            OpenIDProvider.id,
+            error=error)
     return ret

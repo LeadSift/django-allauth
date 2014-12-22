@@ -1,6 +1,7 @@
 from django.utils.encoding import python_2_unicode_compatible
 
 from allauth.socialaccount import app_settings
+from allauth.account.models import EmailAddress
 
 from ..models import SocialApp, SocialAccount, SocialLogin
 from ..adapter import get_adapter
@@ -9,11 +10,18 @@ from ..adapter import get_adapter
 class AuthProcess(object):
     LOGIN = 'login'
     CONNECT = 'connect'
+    REDIRECT = 'redirect'
 
 
 class AuthAction(object):
     AUTHENTICATE = 'authenticate'
     REAUTHENTICATE = 'reauthenticate'
+
+
+class AuthError(object):
+    UNKNOWN = 'unknown'
+    CANCELLED = 'cancelled'  # Cancelled on request of user
+    DENIED = 'denied'  # Denied by server
 
 
 class Provider(object):
@@ -48,9 +56,11 @@ class Provider(object):
                                       uid=uid,
                                       provider=self.id)
         email_addresses = self.extract_email_addresses(response)
-        sociallogin = SocialLogin(socialaccount,
+        self.cleanup_email_addresses(common_fields.get('email'),
+                                     email_addresses)
+        sociallogin = SocialLogin(account=socialaccount,
                                   email_addresses=email_addresses)
-        user = socialaccount.user = adapter.new_user(request, sociallogin)
+        user = sociallogin.user = adapter.new_user(request, sociallogin)
         user.set_unusable_password()
         adapter.populate_user(request, sociallogin, common_fields)
         return sociallogin
@@ -72,6 +82,20 @@ class Provider(object):
         {'first_name': 'John'}
         """
         return {}
+
+    def cleanup_email_addresses(self, email, addresses):
+        # Move user.email over to EmailAddress
+        if (email and email.lower() not in [
+                a.email.lower() for a in addresses]):
+            addresses.append(EmailAddress(email=email,
+                                          verified=False,
+                                          primary=True))
+        # Force verified emails
+        settings = self.get_settings()
+        verified_email = settings.get('VERIFIED_EMAIL', False)
+        if verified_email:
+            for address in addresses:
+                address.verified = True
 
     def extract_email_addresses(self, data):
         """

@@ -183,6 +183,13 @@ class AppSettings(object):
         return self._setting('CONFIRM_EMAIL_ON_GET', False)
 
     @property
+    def LOGIN_ON_EMAIL_CONFIRMATION(self):
+        """
+        Autmatically log the user in once they confirmed their email address
+        """
+        return self._setting('LOGIN_ON_EMAIL_CONFIRMATION', True)
+
+    @property
     def LOGOUT_REDIRECT_URL(self):
         return self._setting('LOGOUT_REDIRECT_URL', '/')
 
@@ -197,6 +204,27 @@ class AppSettings(object):
     @property
     def USER_MODEL_EMAIL_FIELD(self):
         return self._setting('USER_MODEL_EMAIL_FIELD', 'email')
+
+    @property
+    def SESSION_COOKIE_AGE(self):
+        """
+        Remembered sessions expire after this many seconds.
+        Defaults to 1814400 seconds which is 3 weeks.
+        """
+        return self._setting('SESSION_COOKIE_AGE', 60 * 60 * 24 * 7 * 3)
+
+    @property
+    def SESSION_REMEMBER(self):
+        """
+        Controls the life time of the session. Set to `None` to ask the user
+        ("Remember me?"), `False` to not remember, and `True` to always
+        remember.
+        """
+        return self._setting('SESSION_REMEMBER', None)
+
+    @property
+    def FORMS(self):
+        return self._setting('FORMS', {})
 
 
 # Ugly? Guido recommends this himself ...

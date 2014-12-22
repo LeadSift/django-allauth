@@ -1,6 +1,3 @@
-import hashlib
-import random
-
 from datetime import timedelta
 try:
     from django.utils.timezone import now
@@ -10,11 +7,13 @@ except ImportError:
 
 from django.contrib import messages
 from django.core.urlresolvers import reverse
-from django.shortcuts import render
 from django.conf import settings
-from django.contrib.auth import login
 from django.http import HttpResponseRedirect
+from django.utils import six
 from django.utils.http import urlencode
+from django.utils.http import int_to_base36, base36_to_int
+from django.core.exceptions import ValidationError
+
 from django.utils.datastructures import SortedDict
 try:
     from django.utils.encoding import force_text
@@ -37,8 +36,7 @@ def get_next_redirect_url(request, redirect_field_name="next"):
     via the request.
     """
     redirect_to = request.REQUEST.get(redirect_field_name)
-    # light security check -- make sure redirect_to isn't garabage.
-    if not redirect_to or "://" in redirect_to or " " in redirect_to:
+    if not get_adapter().is_safe_url(redirect_to):
         redirect_to = None
     return redirect_to
 
@@ -125,23 +123,20 @@ def perform_login(request, user, email_verification,
     # stopped anyway.
     if not user.is_active:
         return HttpResponseRedirect(reverse('account_inactive'))
-    # HACK: This may not be nice. The proper Django way is to use an
-    # authentication backend, but I fail to see any added benefit
-    # whereas I do see the downsides (having to bother the integrator
-    # to set up authentication backends in settings.py
-    if not hasattr(user, 'backend'):
-        user.backend = "allauth.account.auth_backends.AuthenticationBackend"
+    get_adapter().login(request, user)
+    response = HttpResponseRedirect(
+        get_login_redirect_url(request, redirect_url))
     signals.user_logged_in.send(sender=user.__class__,
                                 request=request,
+                                response=response,
                                 user=user,
                                 **signal_kwargs)
-    login(request, user)
     get_adapter().add_message(request,
                               messages.SUCCESS,
                               'account/messages/logged_in.txt',
                               {'user': user})
 
-    return HttpResponseRedirect(get_login_redirect_url(request, redirect_url))
+    return response
 
 
 def complete_signup(request, user, email_verification, success_url,
@@ -327,16 +322,28 @@ def sync_user_email_addresses(user):
                                     verified=False)
 
 
-def random_token(extra=None, hash_func=hashlib.sha256):
-    if extra is None:
-        extra = []
-    bits = extra + [str(random.SystemRandom().getrandbits(512))]
-    return hash_func("".join(bits).encode('utf-8')).hexdigest()
-
-
 def passthrough_next_redirect_url(request, url, redirect_field_name):
     assert url.find("?") < 0  # TODO: Handle this case properly
     next_url = get_next_redirect_url(request, redirect_field_name)
     if next_url:
         url = url + '?' + urlencode({redirect_field_name: next_url})
     return url
+
+
+def user_pk_to_url_str(user):
+    ret = user.pk
+    if isinstance(ret, six.integer_types):
+        ret = int_to_base36(user.pk)
+    return ret
+
+
+def url_str_to_user_pk(s):
+    User = get_user_model()
+    # TODO: Ugh, isn't there a cleaner way to determine whether or not
+    # the PK is a str-like field?
+    try:
+        User._meta.pk.to_python('a')
+        pk = s
+    except ValidationError:
+        pk = base36_to_int(s)
+    return pk
